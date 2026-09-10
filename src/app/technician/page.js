@@ -15,18 +15,20 @@ export default function TechnicianPage() {
   const [selectedId, setSelectedId] = useState("");
   const [notes, setNotes] = useState("");
   const [loading, setLoading] = useState(true);
-  const [updating, setUpdating] = useState(false);
+  const [updatingStatus, setUpdatingStatus] = useState(null); // which status is in-flight, or null
   const [notice, setNotice] = useState("");
   const [mobileTab, setMobileTab] = useState("list"); // 'list' | 'detail'
+  const [confirmResolve, setConfirmResolve] = useState(false);
+
+  const updating = updatingStatus !== null;
 
   // Socket.io real-time dispatch subscription
   useEffect(() => {
     const socket = getSocket();
 
     const handleNewDispatch = (newJob) => {
-      console.log("📥 New job assigned:", newJob);
       setJobs((prev) => [newJob, ...prev]);
-      toast.info(`🔔 New job dispatched: ${newJob.asset?.name || "Equipment"}`);
+      toast.info(`New job dispatched: ${newJob.asset?.name || "Equipment"}`);
     };
 
     socket.on("dispatch:new", handleNewDispatch);
@@ -36,31 +38,42 @@ export default function TechnicianPage() {
     };
   }, []);
 
-  async function loadJobs() {
+  async function loadJobs(preserveSelection = true) {
     setLoading(true);
     try {
       const payload = await api.getMyJobs();
       const data = payload.data || [];
       setJobs(data);
-      if (data.length > 0 && !selectedId) {
-        setSelectedId(data[0]._id);
-      }
       setNotice("");
+
+      if (!preserveSelection || !data.some((job) => job._id === selectedId)) {
+        setSelectedId(data[0]?._id || "");
+      }
     } catch (err) {
       const demo = demoWorkOrders.filter((order) => order.status !== "OPEN");
       setJobs(demo);
-      if (demo.length > 0 && !selectedId) {
-        setSelectedId(demo[0]._id);
-      }
       setNotice(`Demo mode: ${err.message}`);
+
+      if (!preserveSelection || !demo.some((job) => job._id === selectedId)) {
+        setSelectedId(demo[0]?._id || "");
+      }
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    loadJobs();
+    loadJobs(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Reset the notes draft and any pending confirmation whenever the
+  // selected job changes, so a previous job's notes never leak into
+  // the next one.
+  useEffect(() => {
+    setNotes("");
+    setConfirmResolve(false);
+  }, [selectedId]);
 
   const selected = useMemo(
     () => jobs.find((job) => job._id === selectedId),
@@ -70,21 +83,24 @@ export default function TechnicianPage() {
   async function updateStatus(status) {
     if (!selected) return;
 
-    setUpdating(true);
-    const friendlyName = status.replace("_", " ").toLowerCase();
-    setNotice(`Updating job to ${friendlyName}...`);
+    if (status === "RESOLVED" && !confirmResolve) {
+      setConfirmResolve(true);
+      return;
+    }
+
+    setUpdatingStatus(status);
+    setNotice("");
 
     try {
       await api.updateWorkOrderStatus(selected._id, { status, notes });
-      toast.success(`Job marked as ${status.replace("_", " ")}!`);
-      setNotes("");
-      setNotice("");
+      toast.success(`Job marked as ${status.replace("_", " ").toLowerCase()}.`);
+      setConfirmResolve(false);
       await loadJobs();
     } catch (err) {
       toast.error(err.message || "Failed to update status.");
       setNotice(err.message);
     } finally {
-      setUpdating(false);
+      setUpdatingStatus(null);
     }
   }
 
@@ -108,13 +124,23 @@ export default function TechnicianPage() {
           <p>Review assigned maintenance jobs, triage AI guidance, and log service updates.</p>
         </div>
 
-        {notice && <span className="soft-alert">{notice}</span>}
+        {notice && (
+          <span className="soft-alert" role="status" aria-live="polite">
+            {notice}
+          </span>
+        )}
       </header>
 
       {/* Mobile Tab Switcher */}
-      <div className="flex md:hidden items-center gap-2 mb-4 p-1 bg-slate-100 dark:bg-slate-850 rounded-xl">
+      <div
+        role="tablist"
+        aria-label="Technician view"
+        className="flex md:hidden items-center gap-2 mb-4 p-1 bg-slate-100 dark:bg-slate-850 rounded-xl"
+      >
         <button
           type="button"
+          role="tab"
+          aria-selected={mobileTab === "list"}
           onClick={() => setMobileTab("list")}
           className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
             mobileTab === "list"
@@ -126,12 +152,14 @@ export default function TechnicianPage() {
         </button>
         <button
           type="button"
+          role="tab"
+          aria-selected={mobileTab === "detail"}
           onClick={() => setMobileTab("detail")}
           disabled={!selected}
           className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
             mobileTab === "detail"
               ? "bg-white dark:bg-slate-900 text-teal-800 dark:text-teal-300 shadow-xs"
-              : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 disabled:opacity-50"
+              : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
           }`}
         >
           Job Details
@@ -163,9 +191,12 @@ export default function TechnicianPage() {
           ) : (
             jobs.map((job) => {
               const isSelected = job._id === selectedId;
+              const shortId = job._id ? job._id.slice(-5) : "-----";
               return (
                 <button
                   key={job._id}
+                  type="button"
+                  aria-current={isSelected}
                   className={`job-card cursor-pointer ${isSelected ? "selected" : ""}`}
                   onClick={() => handleSelectJob(job._id)}
                 >
@@ -175,11 +206,11 @@ export default function TechnicianPage() {
                         {job.asset?.name || "Unknown asset"}
                       </strong>
                       <small className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1 mt-0.5">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-400">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-400 shrink-0">
                           <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
                           <circle cx="12" cy="10" r="3" />
                         </svg>
-                        <span>{getLocation(job.asset)}</span>
+                        <span className="truncate">{getLocation(job.asset)}</span>
                       </small>
                     </div>
 
@@ -189,7 +220,7 @@ export default function TechnicianPage() {
                   <div className="flex items-center justify-between pt-1 border-t border-slate-100 dark:border-slate-800 mt-1">
                     <StatusBadge status={job.status} />
                     <span className="text-[11px] font-mono text-slate-400 dark:text-slate-500">
-                      #{job._id.slice(-5)}
+                      #{shortId}
                     </span>
                   </div>
                 </button>
@@ -236,7 +267,7 @@ export default function TechnicianPage() {
                       {selected.asset?.name || "Facility Equipment"}
                     </h2>
                     <span className="text-xs font-mono text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded">
-                      #{selected._id.slice(-6)}
+                      #{selected._id ? selected._id.slice(-6) : "------"}
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
@@ -280,11 +311,12 @@ export default function TechnicianPage() {
               </div>
 
               {/* Technician Service Notes */}
-              <label>
+              <label htmlFor="service-notes">
                 <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
                   Service Notes / Action Log
                 </span>
                 <textarea
+                  id="service-notes"
                   rows={4}
                   placeholder="Record parts replaced, multimeter readings, root cause confirmation, or completion notes..."
                   value={notes}
@@ -297,13 +329,17 @@ export default function TechnicianPage() {
               <div className="status-actions pt-2">
                 <button
                   type="button"
-                  className="secondary-button flex-1 py-2.5 font-semibold text-sm cursor-pointer"
+                  className="secondary-button flex-1 py-2.5 font-semibold text-sm cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                   disabled={updating || selected.status === "IN_PROGRESS"}
                   onClick={() => updateStatus("IN_PROGRESS")}
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polygon points="5 3 19 12 5 21 5 3" />
-                  </svg>
+                  {updatingStatus === "IN_PROGRESS" ? (
+                    <Spinner />
+                  ) : (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polygon points="5 3 19 12 5 21 5 3" />
+                    </svg>
+                  )}
                   <span>
                     {selected.status === "IN_PROGRESS"
                       ? "Work In Progress"
@@ -313,24 +349,53 @@ export default function TechnicianPage() {
 
                 <button
                   type="button"
-                  className="primary-button flex-1 py-2.5 font-semibold text-sm cursor-pointer"
+                  className={`flex-1 py-2.5 font-semibold text-sm cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed ${
+                    confirmResolve ? "primary-button ring-2 ring-teal-400" : "primary-button"
+                  }`}
                   disabled={updating || selected.status === "RESOLVED"}
                   onClick={() => updateStatus("RESOLVED")}
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
+                  {updatingStatus === "RESOLVED" ? (
+                    <Spinner />
+                  ) : (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  )}
                   <span>
                     {selected.status === "RESOLVED"
                       ? "Job Resolved"
-                      : "Complete & Mark Resolved"}
+                      : confirmResolve
+                        ? "Tap again to confirm"
+                        : "Complete & Mark Resolved"}
                   </span>
                 </button>
               </div>
+              {confirmResolve && (
+                <p className="text-xs text-slate-500 dark:text-slate-400 -mt-2">
+                  This closes the job out. Tap "Mark Resolved" again to confirm, or start typing notes to cancel.
+                </p>
+              )}
             </div>
           )}
         </div>
       </section>
     </AppShell>
+  );
+}
+
+function Spinner() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      className="animate-spin"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" strokeOpacity="0.25" />
+      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
   );
 }
