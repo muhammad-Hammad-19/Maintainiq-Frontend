@@ -7,7 +7,6 @@ const THEME_KEY = "maintainiq_theme";
 export function getInitialTheme() {
   if (typeof window === "undefined") return "light";
 
-  // Blocking script (layout.js) already class laga chuka hai — usi se sach maano
   if (document.documentElement.classList.contains("dark")) return "dark";
 
   const stored = localStorage.getItem(THEME_KEY);
@@ -29,10 +28,15 @@ export function applyTheme(theme) {
 }
 
 export function useTheme() {
-  // Lazy init function — pehle render pe hi sahi value milti hai, "light" flash nahi hoga
-  const [theme, setThemeState] = useState(getInitialTheme);
+  // "light" se start — SSR se match, hydration mismatch nahi hoga
+  const [theme, setThemeState] = useState("light");
+  const [mounted, setMounted] = useState(false);
 
   useLayoutEffect(() => {
+    // Browser paint se PEHLE asal theme set karo — flash nahi dikhega
+    setThemeState(getInitialTheme());
+    setMounted(true);
+
     function handleThemeChange(e) {
       setThemeState(e.detail);
     }
@@ -49,5 +53,5 @@ export function useTheme() {
     applyTheme(next);
   };
 
-  return { theme, isDark: theme === "dark", toggleTheme };
+  return { theme, isDark: theme === "dark", toggleTheme, mounted };
 }
