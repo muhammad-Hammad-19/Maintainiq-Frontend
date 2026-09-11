@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 
 const THEME_KEY = "maintainiq_theme";
 
@@ -23,14 +23,16 @@ export function applyTheme(theme) {
 
   document.documentElement.classList.toggle("dark", theme === "dark");
   localStorage.setItem(THEME_KEY, theme);
-  window.dispatchEvent(new CustomEvent("maintainiq-theme-change", { detail: theme }));
+  window.dispatchEvent(
+    new CustomEvent("maintainiq-theme-change", { detail: theme }),
+  );
 }
 
 export function useTheme() {
   // Lazy init function — pehle render pe hi sahi value milti hai, "light" flash nahi hoga
   const [theme, setThemeState] = useState(getInitialTheme);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     function handleThemeChange(e) {
       setThemeState(e.detail);
     }
